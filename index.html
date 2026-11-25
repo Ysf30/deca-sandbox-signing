@@ -175,11 +175,27 @@ signBtn.addEventListener("click", async () => {
     };
     const message = { from: EXPECTED_ACCOUNT, to: PAY_TO, value: AMOUNT, validAfter, validBefore, nonce };
     const signature = await signer.signTypedData(domain, types, message);
+    // x402 v2 (per @x402/core 2.x): the payment is {x402Version, payload,
+    // resource, accepted} — scheme/network live INSIDE `accepted`, NOT at
+    // the top level. A top-level scheme+network is the v1 shape and the
+    // server rejects it as "old x402 v1 form".
     const payload = {
       x402Version: 2,
-      scheme: "exact",
-      network: "eip155:84532",
-      payload: { signature, authorization: { from: EXPECTED_ACCOUNT, to: PAY_TO, value: AMOUNT, validAfter, validBefore, nonce } }
+      payload: { signature, authorization: { from: EXPECTED_ACCOUNT, to: PAY_TO, value: AMOUNT, validAfter, validBefore, nonce } },
+      resource: {
+        url: "https://app.decalabs.ai/api/agent/tests",
+        description: "DECA demand test: signal option, $600 of ads and the $29 launch fee, US/GB/CA (sandbox)",
+        mimeType: "application/json"
+      },
+      accepted: {
+        scheme: "exact",
+        network: "eip155:84532",
+        amount: AMOUNT,
+        asset: USDC,
+        payTo: PAY_TO,
+        maxTimeoutSeconds: 300,
+        extra: { name: "USDC", version: "2" }
+      }
     };
     const payment = b64encode(JSON.stringify(payload));
     paymentOut.value = payment;
