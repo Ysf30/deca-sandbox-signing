@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tanda Tangan Pembayaran DECA Sandbox</title>
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.0/dist/ethers.umd.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; line-height: 1.5; color: #1a1a1a; }
+  .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin: 16px 0; }
+  .card h2 { margin: 0 0 8px; font-size: 18px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+  .row span:first-child { color: #555; }
+  .row code { word-break: break-all; }
+  button { padding: 12px 20px; font-size: 16px; border-radius: 10px; border: none; background: #2563eb; color: #fff; cursor: pointer; margin: 6px 6px 6px 0; }
+  button:disabled { background: #9ca3af; cursor: not-allowed; }
+  button.secondary { background: #e5e7eb; color: #111; }
+  textarea { width: 100%; min-height: 110px; font-family: monospace; font-size: 12px; }
+  .ok { color: #15803d; } .warn { color: #b45309; } .err { color: #b91c1c; }
+  #status { white-space: pre-wrap; }
+  .step { font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>Tanda Tangan Pembayaran DECA Sandbox</h1>
+<p>Bayar tes sandbox DECA (+30 poin) dengan <b>tepat 1 test USDC</b> di Base Sepolia. Tanda tangan ini <b>hanya</b> mengizinkan transfer 1 test USDC ke DECA — tidak ada yang lain. Cek detailnya di MetaMask sebelum tanda tangan.</p>
+
+<div class="card">
+  <h2>Detail pembayaran</h2>
+  <div class="row"><span>Jumlah</span><b>1 test USDC</b></div>
+  <div class="row"><span>Dari</span><code>0x00c889e02fc1a9e4CDB5E0954A3EbB23E2F536AE</code></div>
+  <div class="row"><span>Ke (DECA)</span><code>0x7FB30eD8D7a7B45EE7b98903d94D87D1B9C3DaD2</code></div>
+  <div class="row"><span>Jaringan</span><b>Base Sepolia (84532)</b></div>
+  <div class="row"><span>Token</span><code>0x036CbD53842c5426634e7929541eC2318f3dCF7e (USDC)</code></div>
+  <div class="row"><span>Opsi tes</span><b>Signal — ide "Mochi"</b></div>
+</div>
+
+<p><span class="step">Langkah 1.</span> Hubungkan MetaMask (akun 0x00c889…36AE, jaringan Base Sepolia).</p>
+<button id="connectBtn" disabled>Hubungkan MetaMask</button>
+<p id="accountLine"></p>
+
+<p><span class="step">Langkah 2.</span> Tanda tangan otorisasi pembayaran (EIP-3009, berlaku 5 menit).</p>
+<button id="signBtn" disabled>Tanda tangan 1 test USDC</button>
+
+<p><span class="step">Langkah 3.</span> Salin kode pembayaran di bawah ini dan kirim balik ke Mochi di chat.</p>
+<textarea id="paymentOut" readonly placeholder="Kode pembayaran (base64) akan muncul di sini setelah tanda tangan."></textarea><br>
+<button id="copyBtn" class="secondary" disabled>Salin kode pembayaran</button>
+
+<p id="status"></p>
+
+<script>
+const EXPECTED_ACCOUNT = "0x00c889e02fc1a9e4CDB5E0954A3EbB23E2F536AE";
+const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+const PAY_TO = "0x7FB30eD8D7a7B45EE7b98903d94D87D1B9C3DaD2";
+const CHAIN_ID = 84532;
+const AMOUNT = "1000000"; // 1 test USDC, 6 decimals
+
+const statusEl = document.getElementById("status");
+const accountLine = document.getElementById("accountLine");
+const connectBtn = document.getElementById("connectBtn");
+const signBtn = document.getElementById("signBtn");
+const copyBtn = document.getElementById("copyBtn");
+const paymentOut = document.getElementById("paymentOut");
+
+function setStatus(msg, cls) {
+  statusEl.textContent = msg;
+  statusEl.className = cls || "";
+}
+
+function b64encode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  bytes.forEach(b => { bin += String.fromCharCode(b); });
+  return btoa(bin);
+}
+
+// MetaMask di Chrome ini injeksinya telat (~10 detik): jangan cek sekali saat
+// load, tapi tunggu sampai provider muncul (poll + event EIP-6963).
+let providerReady = false;
+function markReady(source) {
+  if (providerReady) return;
+  providerReady = true;
+  connectBtn.disabled = false;
+  setStatus("MetaMask ketemu (" + source + "). Pencet \"Hubungkan MetaMask\".", "ok");
+}
+function waitForProvider() {
+  setStatus("Mencari MetaMask… tunggu sebentar (injeksi di browser ini bisa telat ~10 detik).", "");
+  if (window.ethereum) { markReady("window.ethereum"); return; }
+  window.addEventListener("eip6963:announceProvider", (ev) => {
+    const detail = ev.detail || {};
+    const info = detail.info || {};
+    if (info.rdns === "io.metamask" || (detail.provider && !window.ethereum)) {
+      if (detail.provider && !window.ethereum) window.ethereum = detail.provider;
+      markReady("EIP-6963" + (info.name ? " (" + info.name + ")" : ""));
+    }
+  });
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+  const deadline = Date.now() + 30000;
+  const timer = setInterval(() => {
+    if (window.ethereum) { clearInterval(timer); markReady("window.ethereum"); return; }
+    if (Date.now() > deadline) {
+      clearInterval(timer);
+      setStatus("MetaMask belum ketemu setelah 30 detik. Pastikan MetaMask terpasang dan aktif di Chrome ini, lalu reload halaman ini.", "warn");
+    }
+  }, 500);
+}
+
+async function ensureChain() {
+  const hex = await window.ethereum.request({ method: "eth_chainId" });
+  if (parseInt(hex, 16) === CHAIN_ID) return true;
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x14a34" }] });
+    return true;
+  } catch (e) {
+    if (e && e.code === 4902) {
+      await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{
+        chainId: "0x14a34", chainName: "Base Sepolia",
+        nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+        rpcUrls: ["https://sepolia.base.org"],
+        blockExplorerUrls: ["https://sepolia.basescan.org"]
+      }]});
+      return true;
+    }
+    throw e;
+  }
+}
+
+connectBtn.addEventListener("click", async () => {
+  try {
+    if (!window.ethereum) { setStatus("MetaMask tidak ditemukan. Reload halaman ini.", "err"); return; }
+    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    const account = accounts[0];
+    if (account.toLowerCase() !== EXPECTED_ACCOUNT.toLowerCase()) {
+      accountLine.innerHTML = '<span class="warn">Akun terhubung: ' + account + ' — BUKAN akun yang diharapkan. Ganti akun di MetaMask ke 0x00c889…36AE lalu hubungkan lagi.</span>';
+      setStatus("Akun salah. Tanda tangan harus dari 0x00c889…36AE.", "err");
+      signBtn.disabled = true;
+      return;
+    }
+    await ensureChain();
+    accountLine.innerHTML = '<span class="ok">Terhubung: ' + account + ' di Base Sepolia.</span>';
+    setStatus("Siap tanda tangan.", "ok");
+    signBtn.disabled = false;
+  } catch (e) {
+    setStatus("Gagal menghubungkan: " + (e && e.message ? e.message : e), "err");
+  }
+});
+
+signBtn.addEventListener("click", async () => {
+  try {
+    setStatus("Menyiapkan otorisasi…", "");
+    signBtn.disabled = true;
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    const from = (await signer.getAddress()).toLowerCase();
+    if (from !== EXPECTED_ACCOUNT.toLowerCase()) {
+      setStatus("Akun berubah. Hubungkan lagi dengan akun 0x00c889…36AE.", "err");
+      signBtn.disabled = false;
+      return;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const validAfter = "0";
+    const validBefore = String(now + 300);
+    const nonceBytes = ethers.randomBytes(32);
+    const nonce = ethers.hexlify(nonceBytes);
+    const domain = { name: "USDC", version: "2", chainId: CHAIN_ID, verifyingContract: USDC };
+    const types = {
+      TransferWithAuthorization: [
+        { name: "from", type: "address" },
+        { name: "to", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "validAfter", type: "uint256" },
+        { name: "validBefore", type: "uint256" },
+        { name: "nonce", type: "bytes32" }
+      ]
+    };
+    const message = { from: EXPECTED_ACCOUNT, to: PAY_TO, value: AMOUNT, validAfter, validBefore, nonce };
+    const signature = await signer.signTypedData(domain, types, message);
+    const payload = {
+      x402Version: 2,
+      scheme: "exact",
+      network: "eip155:84532",
+      payload: { signature, authorization: { from: EXPECTED_ACCOUNT, to: PAY_TO, value: AMOUNT, validAfter, validBefore, nonce } }
+    };
+    const payment = b64encode(JSON.stringify(payload));
+    paymentOut.value = payment;
+    copyBtn.disabled = false;
+    setStatus("Berhasil ditanda tangani.\n"
+      + "Jumlah: 1 test USDC ke " + PAY_TO + "\n"
+      + "Berlaku s.d.: " + new Date((now + 300) * 1000).toLocaleTimeString("id-ID") + " (5 menit)\n"
+      + "Salin kode di atas dan kirim ke Mochi secepatnya — Mochi langsung lanjut start_test.", "ok");
+  } catch (e) {
+    setStatus("Gagal tanda tangan: " + (e && e.message ? e.message : e), "err");
+    signBtn.disabled = false;
+  }
+});
+
+copyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(paymentOut.value);
+    setStatus("Kode disalin. Kirim ke Mochi di chat.", "ok");
+  } catch (e) {
+    paymentOut.select();
+    setStatus("Salin manual: blokir teks di atas (Ctrl+A, Ctrl+C).", "warn");
+  }
+});
+
+waitForProvider();
+</script>
+</body>
+</html>
